@@ -1,0 +1,107 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+parameters:
+- name: environment
+  displayName: Target environment
+  type: string
+  default: dev
+  values:
+    - dev
+    - test
+    - prod
+
+- name: payloadFile
+  displayName: Payload file (relative path)
+  type: string
+  default: deploy/payloads/dev.json
+
+variables:
+  # Base URL can be set per-stage or per environment using variable groups
+  # Keep secrets (API keys) in variable groups or KeyVault integration.
+  pythonVersion: '3.13'
+
+stages:
+# ----------------------------
+# VALIDATE (runs on PR and main)
+# ----------------------------
+- stage: Validate
+  displayName: Validate payload
+  jobs:
+  - job: ValidatePayload
+    displayName: Schema validation
+    pool:
+      name: 'SelfHosted-Airgapped'   # <-- change to your agent pool
+    steps:
+    - checkout: self
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+
+    # Install deps from your internal feed (configure pip.conf on agents or use extra-index-url)
+    - script: |
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt
+      displayName: Install python deps
+
+    - script: |
+        python deploy/scripts/validate_payload.py \
+          --payload "${{ parameters.payloadFile }}" \
+          --schema "deploy/schema/deployment.schema.json"
+      displayName: Validate payload against schema
+
+# ----------------------------
+# DEPLOY (only on main, gated by env approvals via Azure DevOps Environments)
+# ----------------------------
+- stage: Deploy
+  displayName: Deploy via REST API
+  dependsOn: Validate
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployJob
+    displayName: Deploy ${{ parameters.environment }}
+    environment: ${{ parameters.environment }}   # Configure approvals/checks in ADO UI per environment
+    pool:
+      name: 'SelfHosted-Airgapped'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(pythonVersion)'
+
+          - script: |
+              python -m pip install --upgrade pip
+              python -m pip install -r requirements.txt
+            displayName: Install python deps
+
+          # API base URL can be different per environment - recommend variable groups per env
+          - script: |
+              python deploy/scripts/deploy.py \
+                --payload "${{ parameters.payloadFile }}"
+            displayName: Call Deployment API
+            env:
+              DEPLOY_API_BASE_URL: $(DEPLOY_API_BASE_URL)
+              DEPLOY_API_KEY: $(DEPLOY_API_KEY)
+              DEPLOY_API_TIMEOUT: "30"
+              DEPLOY_API_POLL_SECONDS: "10"
+              DEPLOY_API_MAX_WAIT: "3600"
+              DEPLOY_API_MAX_RETRIES: "6"
+
+          - task: PublishBuildArtifacts@1
+            displayName: Publish deploy artifacts
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'deploy-results'
+              publishLocation: 'Container'
