@@ -1,0 +1,13 @@
+{
+  "environment": "dev",
+  "resources": [
+    { "type": "vm", "name": "app-dev-vm01", "size": "Standard_D4s_v5" },
+    { "type": "storage", "name": "stappdev01" },
+    { "type": "keyvault", "name": "kv-app-dev" }
+  ],
+  "tags": {
+    "owner": "platform",
+    "app": "appA",
+    "costCenter": "1234"
+  }
+}
